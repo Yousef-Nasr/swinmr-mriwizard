@@ -39,7 +39,7 @@ env/
 *.ipynb
 
 # Data directories
-data/
+# data/
 cache/
 cache_test/
 

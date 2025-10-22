@@ -4,7 +4,7 @@ import random
 import numpy as np
 import torch
 import cv2
-from numpy import Inf
+from numpy import inf
 from torchvision.utils import make_grid
 from datetime import datetime
 # import torchvision.transforms as transforms
@@ -1090,7 +1090,7 @@ def get_hd_medpy(res, ref):
     elif res.sum() == 0 and ref.sum() == 0:
         hd = 0
     else:
-        hd = Inf
+        hd = inf
     return hd
 
 
