@@ -33,6 +33,60 @@ from utils.metrics import calculate_psnr, calculate_ssim
 from utils.utils_early_stopping import EarlyStopping
 
 
+def save_validation_sample(input_img, target_img, output_img, psnr, ssim, save_path, metadata=None):
+    """
+    Save validation sample with GT and predicted images side by side.
+
+    Args:
+        input_img: Input degraded image (C, H, W)
+        target_img: Ground truth image (C, H, W)
+        output_img: Model output image (C, H, W)
+        psnr: PSNR value
+        ssim: SSIM value
+        save_path: Path to save the image
+        metadata: Optional metadata dict
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    # Convert to numpy and squeeze channel dimension
+    input_np = input_img.detach().cpu().numpy().squeeze()
+    target_np = target_img.detach().cpu().numpy().squeeze()
+    output_np = output_img.detach().cpu().numpy().squeeze()
+
+    # Clip to valid range
+    input_np = np.clip(input_np, 0, 1)
+    target_np = np.clip(target_np, 0, 1)
+    output_np = np.clip(output_np, 0, 1)
+
+    # Create figure with 3 subplots
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    # Input (degraded)
+    axes[0].imshow(input_np, cmap='gray', vmin=0, vmax=1)
+    axes[0].set_title('Input (Degraded)', fontsize=12)
+    axes[0].axis('off')
+
+    # Ground Truth
+    axes[1].imshow(target_np, cmap='gray', vmin=0, vmax=1)
+    axes[1].set_title('Ground Truth', fontsize=12)
+    axes[1].axis('off')
+
+    # Output (predicted)
+    axes[2].imshow(output_np, cmap='gray', vmin=0, vmax=1)
+    axes[2].set_title(f'Output\nPSNR: {psnr:.2f} dB | SSIM: {ssim:.4f}', fontsize=12)
+    axes[2].axis('off')
+
+    # Add metadata if available
+    if metadata:
+        source = metadata.get('source', 'Unknown')
+        fig.suptitle(f'Source: {Path(source).name}', fontsize=10, y=0.98)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+
+
 def train_epoch(model, loader, optimizer, epoch, config, writer, logger, device):
     """Train for one epoch"""
     model.train()
@@ -64,14 +118,17 @@ def train_epoch(model, loader, optimizer, epoch, config, writer, logger, device)
 
         total_loss += loss.item()
 
-        # Logging
-        if batch_idx % config['training']['print_freq'] == 0:
-            logger.info(
-                f"Epoch {epoch} [{batch_idx}/{num_batches}] "
-                f"Loss: {loss.item():.6f}"
-            )
+        # Inline progress bar
+        progress = (batch_idx + 1) / num_batches * 100
+        bar_length = 40
+        filled = int(bar_length * (batch_idx + 1) / num_batches)
+        bar = '█' * filled + '-' * (bar_length - filled)
 
-            # TensorBoard
+        # Print inline (overwrite same line)
+        print(f'\rEpoch {epoch} [{bar}] {progress:.1f}% | Loss: {loss.item():.6f}', end='', flush=True)
+
+        # TensorBoard logging
+        if batch_idx % config['training']['print_freq'] == 0:
             global_step = epoch * num_batches + batch_idx
             writer.add_scalar('train/loss', loss.item(), global_step)
             writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], global_step)
@@ -84,31 +141,49 @@ def train_epoch(model, loader, optimizer, epoch, config, writer, logger, device)
                     writer.add_image('train/target', targets[0], global_step)
                     writer.add_image('train/output', outputs[0].clamp(0, 1), global_step)
 
+    # Print newline after epoch completes
+    print()
+
     avg_loss = total_loss / num_batches
+    logger.info(f"Epoch {epoch} - Train Loss: {avg_loss:.6f}")
     return avg_loss
 
 
 def validate(model, loader, epoch, config, writer, logger, device):
-    """Validate the model"""
-    model.eval()
+    """Validate the model and save sample images"""
+    import matplotlib.pyplot as plt
+    from pathlib import Path
+
+    model.netG.eval()  # Use netG for evaluation
     total_loss = 0
     total_psnr = 0
     total_ssim = 0
     num_samples = 0
+
+    # Create validation samples directory
+    val_samples_dir = Path(config['paths']['samples']) / 'validation' / f'epoch_{epoch:03d}'
+    val_samples_dir.mkdir(parents=True, exist_ok=True)
+
+    # Number of samples to save
+    num_samples_to_save = config['evaluation'].get('num_samples_to_save', 10)
+    saved_count = 0
 
     with torch.no_grad():
         for batch_idx, (inputs, targets, metadata) in enumerate(loader):
             inputs = inputs.to(device)
             targets = targets.to(device)
 
-            # Forward pass
-            outputs = model(inputs)
+            # Forward pass using model's feed_data and test
+            data = {'L': inputs, 'H': targets}
+            model.feed_data(data, need_H=True)
+            model.test()
+            outputs = model.E  # Get enhanced output
 
-            # Compute loss
-            loss = model.compute_loss(outputs, targets, inputs)
+            # Compute loss using model's total_loss
+            loss = model.total_loss()
             total_loss += loss.item()
 
-            # Compute metrics
+            # Compute metrics and save samples
             for i in range(outputs.shape[0]):
                 psnr = calculate_psnr(outputs[i:i+1], targets[i:i+1])
                 ssim = calculate_ssim(outputs[i:i+1], targets[i:i+1])
@@ -116,6 +191,16 @@ def validate(model, loader, epoch, config, writer, logger, device):
                 total_psnr += psnr
                 total_ssim += ssim
                 num_samples += 1
+
+                # Save sample images
+                if saved_count < num_samples_to_save:
+                    save_validation_sample(
+                        inputs[i], targets[i], outputs[i],
+                        psnr, ssim,
+                        val_samples_dir / f'sample_{saved_count:03d}.png',
+                        metadata[i] if metadata else None
+                    )
+                    saved_count += 1
 
     avg_loss = total_loss / len(loader)
     avg_psnr = total_psnr / num_samples
@@ -125,6 +210,7 @@ def validate(model, loader, epoch, config, writer, logger, device):
         f"Validation Epoch {epoch} - "
         f"Loss: {avg_loss:.6f}, PSNR: {avg_psnr:.2f} dB, SSIM: {avg_ssim:.4f}"
     )
+    logger.info(f"Saved {saved_count} validation samples to {val_samples_dir}")
 
     # TensorBoard logging
     writer.add_scalar('val/loss', avg_loss, epoch)
