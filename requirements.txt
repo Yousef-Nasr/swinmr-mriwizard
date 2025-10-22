@@ -1,0 +1,28 @@
+# Core dependencies
+torch>=1.9.0
+torchvision>=0.10.0
+numpy>=1.19.0
+scipy>=1.5.0
+
+# Image processing
+Pillow>=8.0.0
+opencv-python>=4.5.0
+scikit-image>=0.17.0
+
+# Medical imaging
+pydicom>=2.0.0
+
+# Deep learning utilities
+tensorboard>=2.4.0
+timm>=0.4.12
+
+# Visualization
+matplotlib>=3.3.0
+tqdm>=4.60.0
+
+# Optional (for evaluation metrics)
+lpips>=0.1.4
+pytorch-fid>=0.2.0
+
+# Development
+pytest>=6.0.0

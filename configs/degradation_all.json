@@ -1,0 +1,123 @@
+{
+  "name": "comprehensive_degradation",
+  "description": "All undersampling patterns + noise for robust training",
+
+  "noise": {
+    "enabled": true,
+    "type": "gaussian_kspace",
+    "mean": 0.0,
+    "std_range": [0.005, 0.05],
+    "relative": true,
+    "reference": "std"
+  },
+
+  "undersampling": {
+    "strategy": "one_of",
+    "patterns": [
+      {
+        "name": "random",
+        "enabled": true,
+        "weight": 1.0,
+        "params": {
+          "prob_range": [0.3, 0.7],
+          "center_fraction": 0.08,
+          "axis": -2
+        }
+      },
+      {
+        "name": "uniform",
+        "enabled": true,
+        "weight": 1.0,
+        "params": {
+          "R_range": [2, 8],
+          "center_fraction": 0.08,
+          "axis": -2
+        }
+      },
+      {
+        "name": "partial_fourier",
+        "enabled": true,
+        "weight": 1.0,
+        "params": {
+          "fraction_ranges": [[0.6, 0.9], [0.6, 0.9]],
+          "directions": ["+", "+"]
+        }
+      },
+      {
+        "name": "kmax",
+        "enabled": true,
+        "weight": 1.0,
+        "params": {
+          "fraction_ranges": [[0.7, 0.95], [0.7, 0.95]]
+        }
+      },
+      {
+        "name": "elliptical",
+        "enabled": true,
+        "weight": 1.0,
+        "params": {
+          "radii_ranges": [[0.7, 0.95], [0.7, 0.95]]
+        }
+      }
+    ]
+  },
+
+  "artifacts": {
+    "motion": {
+      "enabled": false,
+      "probability": 0.3,
+      "params": {
+        "degrees_range": [5, 15],
+        "translation_range": [5, 15],
+        "num_transforms": 2
+      }
+    },
+    "ghosting": {
+      "enabled": false,
+      "probability": 0.2,
+      "params": {
+        "num_ghosts_range": [2, 4],
+        "intensity_range": [0.05, 0.25]
+      }
+    },
+    "spike": {
+      "enabled": false,
+      "probability": 0.15,
+      "params": {
+        "num_spikes_range": [1, 5],
+        "relative_amp_range": [1.0, 3.0]
+      }
+    },
+    "gibbs": {
+      "enabled": false,
+      "probability": 0.2,
+      "params": {
+        "fraction_range": [0.6, 0.9],
+        "axes": [-1, -2]
+      }
+    }
+  },
+
+  "augmentation": {
+    "enabled": true,
+    "horizontal_flip": {
+      "enabled": true,
+      "probability": 0.5
+    },
+    "vertical_flip": {
+      "enabled": true,
+      "probability": 0.5
+    },
+    "rotation_90": {
+      "enabled": true,
+      "probability": 0.5,
+      "angles": [90, 180, 270]
+    }
+  },
+
+  "execution": {
+    "apply_order": ["noise", "undersampling", "artifacts"],
+    "seed": null,
+    "deterministic": false
+  }
+}

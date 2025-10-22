@@ -1,0 +1,54 @@
+{
+  "name": "minimal_degradation",
+  "description": "Minimal degradation for testing pipeline",
+
+  "noise": {
+    "enabled": true,
+    "type": "gaussian_kspace",
+    "mean": 0.0,
+    "std_range": [0.01, 0.02],
+    "relative": true,
+    "reference": "std"
+  },
+
+  "undersampling": {
+    "strategy": "one_of",
+    "patterns": [
+      {
+        "name": "random",
+        "enabled": true,
+        "weight": 1.0,
+        "params": {
+          "prob_range": [0.5, 0.6],
+          "center_fraction": 0.08,
+          "axis": -2
+        }
+      }
+    ]
+  },
+
+  "artifacts": {},
+
+  "augmentation": {
+    "enabled": true,
+    "horizontal_flip": {
+      "enabled": true,
+      "probability": 0.5
+    },
+    "vertical_flip": {
+      "enabled": true,
+      "probability": 0.5
+    },
+    "rotation_90": {
+      "enabled": true,
+      "probability": 0.5,
+      "angles": [90, 180, 270]
+    }
+  },
+
+  "execution": {
+    "apply_order": ["noise", "undersampling"],
+    "seed": null,
+    "deterministic": false
+  }
+}
