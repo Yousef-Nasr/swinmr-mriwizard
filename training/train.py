@@ -333,8 +333,12 @@ def main():
                 best_val_ssim = val_ssim
                 save_checkpoint(
                     str(ckpt_dir / 'best.pth'),
-                    epoch, model, optimizer, scheduler,
-                    {'val_loss': val_loss, 'val_psnr': val_psnr, 'val_ssim': val_ssim}
+                    model.netG,  # Save the network, not the wrapper
+                    optimizer,
+                    scheduler,
+                    epoch=epoch,
+                    step=0,
+                    metrics={'val_loss': val_loss, 'val_psnr': val_psnr, 'val_ssim': val_ssim}
                 )
                 logger.info(f"✓ Saved best checkpoint (SSIM: {val_ssim:.4f})")
 
@@ -352,8 +356,12 @@ def main():
         if (epoch + 1) % 10 == 0:
             save_checkpoint(
                 str(ckpt_dir / f'epoch_{epoch+1}.pth'),
-                epoch, model, optimizer, scheduler,
-                {'val_ssim': best_val_ssim}
+                model.netG,  # Save the network, not the wrapper
+                optimizer,
+                scheduler,
+                epoch=epoch,
+                step=0,
+                metrics={'val_ssim': best_val_ssim}
             )
 
         epoch_time = time.time() - epoch_start_time
@@ -362,9 +370,12 @@ def main():
     # Save final checkpoint
     save_checkpoint(
         str(ckpt_dir / 'final.pth'),
-        config['training']['epochs'] - 1,
-        model, optimizer, scheduler,
-        {'best_val_ssim': best_val_ssim}
+        model.netG,  # Save the network, not the wrapper
+        optimizer,
+        scheduler,
+        epoch=config['training']['epochs'] - 1,
+        step=0,
+        metrics={'best_val_ssim': best_val_ssim}
     )
 
     if writer is not None:
