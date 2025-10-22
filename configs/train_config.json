@@ -9,9 +9,9 @@
   },
 
   "data": {
-    "train_dir": "../ST1/S1",
-    "val_dir": "../ST1/S3",
-    "test_dir": "../ST1/S2",
+    "train_dir": "../S1",
+    "val_dir": "../S1",
+    "test_dir": "../S1",
 
     "degradation_config": "./degradation_all.json",
 

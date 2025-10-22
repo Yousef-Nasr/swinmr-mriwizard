@@ -344,7 +344,9 @@ def main():
 
             # Early stopping check
             if early_stopping is not None:
-                early_stopping(val_loss if config['training']['early_stopping']['metric'] == 'val_loss' else -val_ssim)
+                # EarlyStopping expects: psnr, model, epoch, step
+                # Use PSNR as the metric (higher is better)
+                is_save = early_stopping(val_psnr, model, epoch, 0)
                 if early_stopping.early_stop:
                     logger.info(f"Early stopping triggered at epoch {epoch}")
                     break
