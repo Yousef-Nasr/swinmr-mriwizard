@@ -276,6 +276,180 @@ class Resize:
             "apply_to": self.apply_to,
             "anti_aliasing": bool(self.anti_aliasing)
         })
-        
+
+        return record
+
+
+class RandomResize:
+    """Randomly resize an image with range-based target sizes.
+
+    This transform randomly resizes the image to a target size sampled from specified ranges.
+    Both k-space and image domain data can be resized. Note that resizing in k-space is
+    generally not recommended as it can introduce artifacts.
+
+    Args:
+        size_range: Range(s) for random target sizes.
+              - If tuple of 2 ints (min, max): uniform range for all dimensions
+              - If tuple of 2 tuples ((min_h, max_h), (min_w, max_w)): separate ranges for each dimension (2D)
+              - If tuple of 3 tuples ((min_d, max_d), (min_h, max_h), (min_w, max_w)): ranges for 3D
+
+              Common examples:
+              - (128, 256): randomly sample size between 128 and 256 for all dimensions
+              - ((128, 256), (128, 256)): independently sample height and width from [128, 256]
+
+        interpolation: Interpolation order for scipy.ndimage.zoom:
+              - 0: Nearest-neighbor (fastest, no smoothing)
+              - 1: Linear/bilinear (good balance)
+              - 2: Quadratic
+              - 3: Cubic (smoothest, slowest)
+              Default: 1 (linear)
+
+        apply_to: What to resize - "image" or "kspace" (not "both" as it's unusual to resize k-space).
+              Default: "image"
+
+        anti_aliasing: If True, apply Gaussian smoothing before downsampling to reduce aliasing.
+              Default: True
+
+        seed: Random seed for reproducibility (optional).
+
+    Example:
+        >>> # Random resize to sizes between 128 and 256 (square)
+        >>> resize = RandomResize(size_range=(128, 256))
+        >>>
+        >>> # Different ranges per dimension
+        >>> resize = RandomResize(size_range=((128, 256), (128, 256)))
+        >>>
+        >>> # 3D with specific ranges
+        >>> resize = RandomResize(size_range=((64, 128), (128, 256), (128, 256)))
+        >>>
+        >>> # With cubic interpolation
+        >>> resize = RandomResize(size_range=(128, 512), interpolation=3)
+
+    Warning:
+        - Resizing changes the pixel spacing and may introduce interpolation artifacts
+        - For medical imaging, consider using CropOrPad instead to preserve physical dimensions
+        - Resizing k-space directly is generally not recommended
+        - Anti-aliasing is important when downsampling to prevent aliasing artifacts
+    """
+
+    def __init__(
+        self,
+        size_range: Union[Tuple[int, int], Tuple[Tuple[int, int], ...]],
+        interpolation: int = 1,
+        apply_to: str = "image",
+        anti_aliasing: bool = True,
+        seed: int = None
+    ):
+        """Initialize the RandomResize transform."""
+        self.size_range = size_range
+        self.interpolation = interpolation
+        self.apply_to = apply_to
+        self.anti_aliasing = anti_aliasing
+        self.seed = seed
+        self.rng = np.random.RandomState(seed)
+
+        if not isinstance(interpolation, int) or not 0 <= interpolation <= 5:
+            raise ValueError(f"interpolation must be an integer between 0 and 5, got {interpolation}")
+
+        if apply_to not in ("image", "kspace"):
+            raise ValueError(f"apply_to must be 'image' or 'kspace', got {apply_to}")
+
+    def _parse_ranges(
+        self,
+        size_range: Union[Tuple[int, int], Tuple[Tuple[int, int], ...]],
+        ndim: int
+    ) -> Tuple[Tuple[int, int], ...]:
+        """Parse size ranges based on data dimensionality.
+
+        Args:
+            size_range: Range specification.
+            ndim: Number of spatial dimensions (2 or 3).
+
+        Returns:
+            Tuple of (min, max) ranges for each dimension.
+        """
+        # Check if it's a single range (min, max)
+        if len(size_range) == 2 and isinstance(size_range[0], int):
+            # Single range for all dimensions
+            return tuple([size_range] * ndim)
+
+        # Multiple ranges - validate length matches ndim
+        if len(size_range) != ndim:
+            raise ValueError(
+                f"Number of ranges ({len(size_range)}) doesn't match data dimensionality ({ndim})"
+            )
+
+        # Validate each range
+        for i, r in enumerate(size_range):
+            if not isinstance(r, (tuple, list)) or len(r) != 2:
+                raise ValueError(f"Range {i} must be a tuple of 2 ints, got {r}")
+            if r[0] > r[1]:
+                raise ValueError(f"Range {i} min ({r[0]}) cannot be greater than max ({r[1]})")
+            if r[0] <= 0:
+                raise ValueError(f"Range {i} min ({r[0]}) must be positive")
+
+        return tuple(size_range)
+
+    def _sample_target_shape(
+        self,
+        ranges: Tuple[Tuple[int, int], ...]
+    ) -> Tuple[int, ...]:
+        """Sample random target shape from ranges.
+
+        Args:
+            ranges: Tuple of (min, max) ranges for each dimension.
+
+        Returns:
+            Tuple of target dimensions.
+        """
+        target_shape = []
+        for min_val, max_val in ranges:
+            size = self.rng.randint(min_val, max_val + 1)
+            target_shape.append(size)
+
+        return tuple(target_shape)
+
+    def __call__(self, record: Record) -> Record:
+        """Apply random resize to the record.
+
+        Args:
+            record: Input record with image and/or kspace data.
+
+        Returns:
+            Record with randomly resized data.
+        """
+        # Determine what to resize
+        if self.apply_to == "image":
+            if record["image"] is None:
+                raise ValueError("Cannot resize image: image data is None")
+            ref_data = record["image"]
+        else:  # apply_to == "kspace"
+            if record["kspace"] is None:
+                raise ValueError("Cannot resize kspace: kspace data is None")
+            ref_data = record["kspace"]
+
+        current_shape = ref_data.shape
+        ndim = ref_data.ndim
+
+        # Parse ranges based on dimensionality
+        ranges = self._parse_ranges(self.size_range, ndim)
+
+        # Sample random target shape
+        target_shape = self._sample_target_shape(ranges)
+
+        # Apply resize using base Resize transform
+        resize_transform = Resize(
+            target_shape=target_shape,
+            interpolation=self.interpolation,
+            apply_to=self.apply_to,
+            anti_aliasing=self.anti_aliasing
+        )
+        record = resize_transform(record)
+
+        # Update metadata to indicate this was random
+        record["metadata"]["applied"][-1]["transform"] = "RandomResize"
+        record["metadata"]["applied"][-1]["size_range"] = [list(r) for r in ranges]
+        record["metadata"]["applied"][-1]["sampled_target_shape"] = list(target_shape)
+
         return record
 

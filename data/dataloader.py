@@ -25,7 +25,7 @@ if mriwizard_path not in sys.path:
 from MriWizard.io.dicom_loader import LoadDICOM
 from MriWizard.io.image_loader import LoadImage
 from MriWizard.core.utils import fft2c, normalize
-from MriWizard.spatial import RandomFlip, Crop, Pad, CropOrPad, Resize
+from MriWizard.spatial import RandomFlip, Crop, Pad, CropOrPad, Resize, RandomCrop, RandomResize
 from .pipeline_builder import build_degradation_pipeline
 
 
@@ -388,11 +388,17 @@ class HybridMRIDataset(Dataset):
         if crop_cfg.get("enabled", False):
             prob = crop_cfg.get("probability", 0.5)
             if np.random.rand() < prob:
-                crop_size = crop_cfg.get("crop_size", 10)
-                # Crop randomly from borders
-                h, w = record["image"].shape
-                crop_vals = np.random.randint(0, crop_size, size=4)  # (h_start, h_end, w_start, w_end)
-                transform = Crop(cropping=tuple(crop_vals), apply_to="image")
+                # Support both old and new config formats
+                if "crop_range" in crop_cfg:
+                    # New range-based format: (min, max) or ((min_h, max_h), (min_w, max_w))
+                    crop_range = crop_cfg["crop_range"]
+                    transform = RandomCrop(cropping_range=crop_range, apply_to="image")
+                else:
+                    # Legacy format: single crop_size value
+                    crop_size = crop_cfg.get("crop_size", 10)
+                    h, w = record["image"].shape
+                    crop_vals = np.random.randint(0, crop_size, size=4)
+                    transform = Crop(cropping=tuple(crop_vals), apply_to="image")
                 record = transform(record)
 
         # 5. Padding
@@ -410,13 +416,24 @@ class HybridMRIDataset(Dataset):
         if resize_cfg.get("enabled", False):
             prob = resize_cfg.get("probability", 0.5)
             if np.random.rand() < prob:
-                target_shape = resize_cfg.get("target_shape", (256, 256))
                 interpolation = resize_cfg.get("interpolation", 1)
-                transform = Resize(
-                    target_shape=target_shape,
-                    interpolation=interpolation,
-                    apply_to="image"
-                )
+                # Support both old and new config formats
+                if "size_range" in resize_cfg:
+                    # New range-based format: (min, max) or ((min_h, max_h), (min_w, max_w))
+                    size_range = resize_cfg["size_range"]
+                    transform = RandomResize(
+                        size_range=size_range,
+                        interpolation=interpolation,
+                        apply_to="image"
+                    )
+                else:
+                    # Legacy format: fixed target_shape
+                    target_shape = resize_cfg.get("target_shape", (256, 256))
+                    transform = Resize(
+                        target_shape=target_shape,
+                        interpolation=interpolation,
+                        apply_to="image"
+                    )
                 record = transform(record)
 
         return record
@@ -486,10 +503,17 @@ class HybridMRIDataset(Dataset):
         if crop_cfg.get("enabled", False):
             weight = crop_cfg.get("weight", 1.0)
             def apply_crop(r):
-                crop_size = crop_cfg.get("crop_size", 10)
-                h, w = r["image"].shape
-                crop_vals = np.random.randint(0, crop_size, size=4)
-                transform = Crop(cropping=tuple(crop_vals), apply_to="image")
+                # Support both old and new config formats
+                if "crop_range" in crop_cfg:
+                    # New range-based format
+                    crop_range = crop_cfg["crop_range"]
+                    transform = RandomCrop(cropping_range=crop_range, apply_to="image")
+                else:
+                    # Legacy format
+                    crop_size = crop_cfg.get("crop_size", 10)
+                    h, w = r["image"].shape
+                    crop_vals = np.random.randint(0, crop_size, size=4)
+                    transform = Crop(cropping=tuple(crop_vals), apply_to="image")
                 return transform(r)
             available_transforms.append({
                 "name": "random_crop",
@@ -517,9 +541,16 @@ class HybridMRIDataset(Dataset):
         if resize_cfg.get("enabled", False):
             weight = resize_cfg.get("weight", 1.0)
             def apply_resize(r):
-                target_shape = resize_cfg.get("target_shape", (256, 256))
                 interpolation = resize_cfg.get("interpolation", 1)
-                transform = Resize(target_shape=target_shape, interpolation=interpolation, apply_to="image")
+                # Support both old and new config formats
+                if "size_range" in resize_cfg:
+                    # New range-based format
+                    size_range = resize_cfg["size_range"]
+                    transform = RandomResize(size_range=size_range, interpolation=interpolation, apply_to="image")
+                else:
+                    # Legacy format
+                    target_shape = resize_cfg.get("target_shape", (256, 256))
+                    transform = Resize(target_shape=target_shape, interpolation=interpolation, apply_to="image")
                 return transform(r)
             available_transforms.append({
                 "name": "resize",

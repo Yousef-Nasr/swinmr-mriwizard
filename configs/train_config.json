@@ -1,33 +1,27 @@
 {
   "experiment_name": "swinmr_mriwizard_hybrid",
-
   "paths": {
     "root": "./results",
     "checkpoints": "./results/checkpoints",
     "logs": "./results/logs",
     "samples": "./results/samples"
   },
-
   "data": {
     "train_dir": "../S1",
     "val_dir": "../S1",
     "test_dir": "../S1",
-
     "degradation_config": "./degradation_all.json",
-
     "batch_size": 1,
     "num_workers": 4,
     "patch_size": 96,
     "use_patches": true,
     "cache_dicom_conversions": true,
     "prefetch_factor": 2,
-
     "augmentation": {
       "random_flip": true,
       "flip_probability": 0.5
     }
   },
-
   "model": {
     "net_type": "swinir",
     "upscale": 1,
@@ -36,9 +30,23 @@
     "img_size": 256,
     "window_size": 8,
     "img_range": 1.0,
-    "depths": [6, 6, 6, 6, 6, 6],
+    "depths": [
+      6,
+      6,
+      6,
+      6,
+      6,
+      6
+    ],
     "embed_dim": 180,
-    "num_heads": [6, 6, 6, 6, 6, 6],
+    "num_heads": [
+      6,
+      6,
+      6,
+      6,
+      6,
+      6
+    ],
     "mlp_ratio": 2,
     "upsampler": "",
     "resi_connection": "1conv",
@@ -46,13 +54,11 @@
     "init_bn_type": "uniform",
     "init_gain": 0.2
   },
-
   "training": {
     "epochs": 100,
     "print_freq": 100,
     "save_freq": 1000,
     "val_freq": 1,
-
     "loss": {
       "type": "multi_component",
       "components": {
@@ -68,24 +74,41 @@
         "perceptual": {
           "type": "vgg19",
           "weight": 0.0025,
-          "layers": [2, 7, 16, 25, 34],
-          "layer_weights": [0.1, 0.1, 1.0, 1.0, 1.0]
+          "layers": [
+            2,
+            7,
+            16,
+            25,
+            34
+          ],
+          "layer_weights": [
+            0.1,
+            0.1,
+            1.0,
+            1.0,
+            1.0
+          ]
         }
       }
     },
-
     "optimizer": {
       "type": "adam",
       "lr": 2e-4,
-      "betas": [0.9, 0.999],
+      "betas": [
+        0.9,
+        0.999
+      ],
       "weight_decay": 0,
       "scheduler": {
         "type": "multistep",
-        "milestones": [25000, 50000, 75000],
+        "milestones": [
+          25000,
+          50000,
+          75000
+        ],
         "gamma": 0.5
       }
     },
-
     "early_stopping": {
       "enabled": true,
       "patience": 10,
@@ -93,28 +116,30 @@
       "mode": "max",
       "min_delta": 0.0001
     },
-
     "gradient": {
       "clip_enabled": true,
       "clip_value": 1.0
     }
   },
-
   "evaluation": {
-    "metrics": ["psnr", "ssim", "lpips"],
+    "metrics": [
+      "psnr",
+      "ssim",
+      "lpips"
+    ],
     "save_images": true,
     "num_samples_to_save": 10
   },
-
   "logging": {
     "tensorboard": true,
     "log_images": true,
     "log_interval": 100,
     "log_degradation_stats": true
   },
-
   "system": {
-    "gpu_ids": [0],
+    "gpu_ids": [
+      0
+    ],
     "distributed": false,
     "mixed_precision": false,
     "deterministic": false,
