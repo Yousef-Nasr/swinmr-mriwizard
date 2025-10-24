@@ -13,6 +13,7 @@ from MriWizard.degrade.biasfield import RandomBiasFieldImage
 from MriWizard.degrade.gibbs import RandomGibbsRinging
 from MriWizard.degrade.blur import RandomGaussianBlurImage
 from MriWizard.degrade.gamma import RandomGamma
+from MriWizard.degrade.identity import Identity
 
 __all__ = [
     "AddGaussianNoiseKspace",
@@ -31,5 +32,5 @@ __all__ = [
     "RandomGibbsRinging",
     "RandomGaussianBlurImage",
     "RandomGamma",
+    "Identity",
 ]
-

@@ -33,7 +33,7 @@ from utils.metrics import calculate_psnr, calculate_ssim
 from utils.utils_early_stopping import EarlyStopping
 
 
-def save_validation_sample(input_img, target_img, output_img, psnr, ssim, save_path, metadata=None):
+def save_validation_sample(input_img, target_img, output_img, psnr_out, ssim_out, save_path, metadata=None):
     """
     Save validation sample with GT and predicted images side by side.
 
@@ -41,8 +41,8 @@ def save_validation_sample(input_img, target_img, output_img, psnr, ssim, save_p
         input_img: Input degraded image (C, H, W)
         target_img: Ground truth image (C, H, W)
         output_img: Model output image (C, H, W)
-        psnr: PSNR value
-        ssim: SSIM value
+        psnr_out: PSNR value for output
+        ssim_out: SSIM value for output
         save_path: Path to save the image
         metadata: Optional metadata dict
     """
@@ -59,28 +59,57 @@ def save_validation_sample(input_img, target_img, output_img, psnr, ssim, save_p
     target_np = np.clip(target_np, 0, 1)
     output_np = np.clip(output_np, 0, 1)
 
+    # Calculate metrics for degraded input
+    psnr_input = calculate_psnr(input_img.unsqueeze(0), target_img.unsqueeze(0))
+    ssim_input = calculate_ssim(input_img.unsqueeze(0), target_img.unsqueeze(0))
+
+    # Calculate improvement
+    psnr_improvement = psnr_out - psnr_input
+    ssim_improvement = ssim_out - ssim_input
+
     # Create figure with 3 subplots
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
     # Input (degraded)
     axes[0].imshow(input_np, cmap='gray', vmin=0, vmax=1)
-    axes[0].set_title('Input (Degraded)', fontsize=12)
+    axes[0].set_title(
+        f'Input (Degraded)\nPSNR: {psnr_input:.2f} dB | SSIM: {ssim_input:.4f}',
+        fontsize=11
+    )
     axes[0].axis('off')
 
     # Ground Truth
     axes[1].imshow(target_np, cmap='gray', vmin=0, vmax=1)
-    axes[1].set_title('Ground Truth', fontsize=12)
+    axes[1].set_title('Ground Truth', fontsize=11)
     axes[1].axis('off')
 
     # Output (predicted)
     axes[2].imshow(output_np, cmap='gray', vmin=0, vmax=1)
-    axes[2].set_title(f'Output\nPSNR: {psnr:.2f} dB | SSIM: {ssim:.4f}', fontsize=12)
+
+    # Color code improvement: green if positive, red if negative
+    psnr_color = 'green' if psnr_improvement > 0 else 'red'
+    ssim_color = 'green' if ssim_improvement > 0 else 'red'
+
+    axes[2].set_title(
+        f'Output (Reconstructed)\n'
+        f'PSNR: {psnr_out:.2f} dB (${psnr_improvement:+.2f}$) | '
+        f'SSIM: {ssim_out:.4f} (${ssim_improvement:+.4f}$)',
+        fontsize=11,
+        color='black'
+    )
     axes[2].axis('off')
 
-    # Add metadata if available
+    # Add metadata and improvement summary
+    title_parts = []
     if metadata:
         source = metadata.get('source', 'Unknown')
-        fig.suptitle(f'Source: {Path(source).name}', fontsize=10, y=0.98)
+        title_parts.append(f'Source: {Path(source).name}')
+
+    title_parts.append(
+        f'Improvement: PSNR {psnr_improvement:+.2f} dB, SSIM {ssim_improvement:+.4f}'
+    )
+
+    fig.suptitle(' | '.join(title_parts), fontsize=10, y=0.98)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches='tight')

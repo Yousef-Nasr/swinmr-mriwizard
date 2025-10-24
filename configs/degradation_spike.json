@@ -1,0 +1,313 @@
+{
+    "name": "comprehensive_degradation_oneof_with_spike_solo",
+    "description": "All degradations using OneOf with identity for controlled randomness. With 0.05 probability: only apply spike artifact, skip other undersampling/artifacts.",
+  
+    "strategy": "one_of",
+    "patterns": [
+      {
+        "name": "standard_pipeline",
+        "weight": 0.95,
+        "pipeline": {
+          "noise": {
+            "strategy": "one_of",
+            "patterns": [
+              {
+                "name": "identity",
+                "enabled": true,
+                "weight": 0.15,
+                "params": {}
+              },
+              {
+                "name": "gaussian_kspace",
+                "enabled": true,
+                "weight": 0.60,
+                "params": {
+                  "mean": 0.0,
+                  "std": [0.05, 0.3],
+                  "relative": true,
+                  "reference": "std"
+                }
+              },
+              {
+                "name": "gaussian_kspace",
+                "enabled": true,
+                "weight": 0.25,
+                "params": {
+                  "mean": 0.0,
+                  "std": [0.3, 0.6],
+                  "relative": true,
+                  "reference": "std"
+                }
+              }
+            ]
+          },
+  
+          "undersampling": {
+            "strategy": "one_of",
+            "patterns": [
+              {
+                "name": "identity",
+                "enabled": true,
+                "weight": 0.05,
+                "params": {}
+              },
+              {
+                "name": "random",
+                "enabled": true,
+                "weight": 0.30,
+                "params": {
+                  "prob_range": [0.3, 0.7],
+                  "center_fraction": 0.08,
+                  "axis": [-2, -1]
+                }
+              },
+              {
+                "name": "uniform",
+                "enabled": true,
+                "weight": 0.30,
+                "params": {
+                  "R_range": [2, 8],
+                  "center_fraction": 0.08,
+                  "axis": [-2, -1]
+                }
+              },
+              {
+                "name": "partial_fourier",
+                "enabled": true,
+                "weight": 0.15,
+                "params": {
+                  "fraction_ranges": [[0.6, 0.9], [0.6, 0.9]],
+                  "directions": ["+", "+"]
+                }
+              },
+              {
+                "name": "kmax",
+                "enabled": true,
+                "weight": 0.10,
+                "params": {
+                  "fraction_ranges": [[0.3, 0.6], [0.3, 0.6]]
+                }
+              },
+              {
+                "name": "elliptical",
+                "enabled": true,
+                "weight": 0.10,
+                "params": {
+                  "radii_ranges": [[0.2, 0.4], [0.2, 0.4]]
+                }
+              }
+            ]
+          },
+  
+          "artifacts": {
+            "strategy": "one_of",
+            "patterns": [
+              {
+                "name": "identity",
+                "enabled": true,
+                "weight": 0.20,
+                "params": {}
+              },
+              {
+                "name": "motion",
+                "enabled": true,
+                "weight": 0.10,
+                "params": {
+                  "degrees": [2, 10],
+                  "translation": [2, 10],
+                  "num_transforms": 2
+                }
+              },
+              {
+                "name": "motion",
+                "enabled": true,
+                "weight": 0.05,
+                "params": {
+                  "degrees": [10, 20],
+                  "translation": [10, 20],
+                  "num_transforms": 3
+                }
+              },
+              {
+                "name": "ghosting",
+                "enabled": true,
+                "weight": 0.15,
+                "params": {
+                  "num_ghosts_range": [2, 4],
+                  "intensity_range": [0.05, 0.15]
+                }
+              },
+              {
+                "name": "ghosting",
+                "enabled": true,
+                "weight": 0.05,
+                "params": {
+                  "num_ghosts_range": [4, 6],
+                  "intensity_range": [0.15, 0.3]
+                }
+              },
+              {
+                "name": "gibbs",
+                "enabled": true,
+                "weight": 0.15,
+                "params": {
+                  "fraction_range": [0.7, 0.9],
+                  "axes": [-1, -2]
+                }
+              },
+              {
+                "name": "gibbs",
+                "enabled": true,
+                "weight": 0.05,
+                "params": {
+                  "fraction_range": [0.5, 0.7],
+                  "axes": [-1, -2]
+                }
+              },
+              {
+                "name": "biasfield",
+                "enabled": true,
+                "weight": 0.05,
+                "params": {
+                  "coeff_range": [0.0, 0.5],
+                  "sigma_frac_range": [0.1, 0.3]
+                }
+              },
+              {
+                "name": "blur",
+                "enabled": true,
+                "weight": 0.15,
+                "params": {
+                  "sigma_px_range": [0.5, 2.0]
+                }
+              },
+              {
+                "name": "blur",
+                "enabled": true,
+                "weight": 0.05,
+                "params": {
+                  "sigma_px_range": [2.0, 4.0]
+                }
+              }
+            ]
+          },
+  
+          "augmentation": {
+            "enabled": true,
+            "strategy": "sequential",
+        
+            "horizontal_flip": {
+              "enabled": true,
+              "probability": 0.5,
+              "weight": 1.0
+            },
+        
+            "vertical_flip": {
+              "enabled": true,
+              "probability": 0.5,
+              "weight": 1.0
+            },
+        
+            "rotation_90": {
+              "enabled": true,
+              "probability": 0.5,
+              "angles": [90, 180, 270],
+              "weight": 1.0
+            },
+        
+            "random_crop": {
+              "enabled": false,
+              "probability": 0.3,
+              "crop_size": 10,
+              "weight": 0.5
+            },
+        
+            "padding": {
+              "enabled": false,
+              "probability": 0.3,
+              "pad_size": 10,
+              "padding_mode": "reflect",
+              "weight": 0.5
+            },
+        
+            "resize": {
+              "enabled": false,
+              "probability": 0.2,
+              "target_shape": [256, 256],
+              "interpolation": 1,
+              "weight": 0.3
+            }
+          },
+  
+          "execution": {
+            "apply_order": ["noise", "undersampling", "artifacts"],
+            "seed": null,
+            "deterministic": false
+          }
+        }
+      },
+      {
+        "name": "spike_only",
+        "weight": 0.05,
+        "pipeline": {
+          "noise": {
+            "strategy": "one_of",
+            "patterns": [
+              {
+                "name": "identity",
+                "enabled": true,
+                "weight": 1.0,
+                "params": {}
+              }
+            ]
+          },
+          "undersampling": {
+            "strategy": "one_of",
+            "patterns": [
+              {
+                "name": "identity",
+                "enabled": true,
+                "weight": 1.0,
+                "params": {}
+              }
+            ]
+          },
+          "artifacts": {
+            "strategy": "one_of",
+            "patterns": [
+              {
+                "name": "spike",
+                "enabled": true,
+                "weight": 1.0,
+                "params": {
+                  "num_spikes_range": [1, 1],
+                  "relative_amp_range": [1.0, 2.5]
+                }
+              }
+            ]
+          },
+          "augmentation": {
+            "enabled": true,
+            "horizontal_flip": {
+              "enabled": true,
+              "probability": 0.5
+            },
+            "vertical_flip": {
+              "enabled": true,
+              "probability": 0.5
+            },
+            "rotation_90": {
+              "enabled": true,
+              "probability": 0.5,
+              "angles": [90, 180, 270]
+            }
+          },
+          "execution": {
+            "apply_order": ["noise", "undersampling", "artifacts"],
+            "seed": null,
+            "deterministic": false
+          }
+        }
+      }
+    ]
+  }  

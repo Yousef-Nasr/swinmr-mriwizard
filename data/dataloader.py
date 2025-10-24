@@ -18,11 +18,14 @@ import json
 import sys
 
 # Add MriWizard to path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'MriWizard'))
+mriwizard_path = '/mnt/host/c/Users/Yousef Nasr/Desktop/Ai Projects/mri/swinMR_final/MriWizard/swinmr_mriwizard/MriWizard'
+if mriwizard_path not in sys.path:
+    sys.path.insert(0, mriwizard_path)
 
 from MriWizard.io.dicom_loader import LoadDICOM
 from MriWizard.io.image_loader import LoadImage
 from MriWizard.core.utils import fft2c, normalize
+from MriWizard.spatial import RandomFlip, Crop, Pad, CropOrPad, Resize
 from .pipeline_builder import build_degradation_pipeline
 
 
@@ -300,52 +303,249 @@ class HybridMRIDataset(Dataset):
 
     def _augment_single(self, img):
         """
-        Apply spatial augmentation to single image based on config
+        Apply spatial augmentation using MriWizard spatial transforms
+        IMPORTANT: This is applied to the GROUND TRUTH first, before degradation
+
+        Supports:
+        - Sequential transforms (apply all enabled transforms)
+        - One-of strategy (randomly select one transform from a group)
+        - All MriWizard spatial transforms: Flip, Crop, Pad, Resize, etc.
+
+        Args:
+            img: Ground truth image (2D numpy array)
 
         Returns:
-            augmented_img: Augmented image
+            augmented_img: Augmented ground truth image
             aug_params: Dictionary with augmentation parameters applied
         """
-        aug_params = {
-            "horizontal_flip": False,
-            "vertical_flip": False,
-            "rotation_k": 0
+        # Create a MriWizard record for the ground truth image
+        record = {
+            "image": img.copy(),
+            "kspace": None,  # Will be computed later
+            "mask": None,
+            "metadata": {
+                "applied": []
+            }
         }
 
-        # Get augmentation config
+        # Get augmentation strategy (default: sequential)
+        strategy = self.aug_config.get("strategy", "sequential")
+
+        if strategy == "one_of":
+            # ONE-OF STRATEGY: Pick one transform randomly
+            record = self._apply_one_of_augmentation(record)
+        else:
+            # SEQUENTIAL STRATEGY: Apply all enabled transforms in sequence
+            record = self._apply_sequential_augmentation(record)
+
+        # Extract augmented image
+        augmented_img = record["image"]
+
+        # Build summary of applied augmentations for metadata
+        aug_params = {
+            "transforms_applied": record["metadata"]["applied"],
+            "num_transforms": len(record["metadata"]["applied"]),
+            "strategy": strategy
+        }
+
+        return augmented_img, aug_params
+
+    def _apply_sequential_augmentation(self, record):
+        """Apply all enabled augmentation transforms sequentially"""
+
+        # 1. Horizontal Flip
         h_flip_cfg = self.aug_config.get("horizontal_flip", {})
-        v_flip_cfg = self.aug_config.get("vertical_flip", {})
-        rot_cfg = self.aug_config.get("rotation_90", {})
-
-        # Random horizontal flip (if enabled in config)
-        if h_flip_cfg.get("enabled", True):
+        if h_flip_cfg.get("enabled", False):
             prob = h_flip_cfg.get("probability", 0.5)
-            if np.random.rand() < prob:
-                img = np.fliplr(img).copy()
-                aug_params["horizontal_flip"] = True
+            transform = RandomFlip(axes=1, flip_probability=prob, apply_to="image")
+            record = transform(record)
 
-        # Random vertical flip (if enabled in config)
-        if v_flip_cfg.get("enabled", True):
+        # 2. Vertical Flip
+        v_flip_cfg = self.aug_config.get("vertical_flip", {})
+        if v_flip_cfg.get("enabled", False):
             prob = v_flip_cfg.get("probability", 0.5)
-            if np.random.rand() < prob:
-                img = np.flipud(img).copy()
-                aug_params["vertical_flip"] = True
+            transform = RandomFlip(axes=0, flip_probability=prob, apply_to="image")
+            record = transform(record)
 
-        # Random 90-degree rotations (if enabled in config)
-        if rot_cfg.get("enabled", True):
+        # 3. Rotation 90 degrees
+        rot_cfg = self.aug_config.get("rotation_90", {})
+        if rot_cfg.get("enabled", False):
             prob = rot_cfg.get("probability", 0.5)
             if np.random.rand() < prob:
-                # Get allowed angles from config (default: 90, 180, 270)
                 angles = rot_cfg.get("angles", [90, 180, 270])
-                # Convert to k values (number of 90-degree rotations)
                 k_values = [angle // 90 for angle in angles]
                 k = np.random.choice(k_values)
                 if k > 0:
-                    img = np.rot90(img, k).copy()
-                    aug_params["rotation_k"] = k
-                    aug_params["rotation_angle"] = k * 90
+                    record["image"] = np.rot90(record["image"], k).copy()
+                    record["metadata"]["applied"].append({
+                        "transform": "Rotation90",
+                        "rotation_k": int(k),
+                        "rotation_angle": int(k * 90)
+                    })
 
-        return img, aug_params
+        # 4. Random Crop
+        crop_cfg = self.aug_config.get("random_crop", {})
+        if crop_cfg.get("enabled", False):
+            prob = crop_cfg.get("probability", 0.5)
+            if np.random.rand() < prob:
+                crop_size = crop_cfg.get("crop_size", 10)
+                # Crop randomly from borders
+                h, w = record["image"].shape
+                crop_vals = np.random.randint(0, crop_size, size=4)  # (h_start, h_end, w_start, w_end)
+                transform = Crop(cropping=tuple(crop_vals), apply_to="image")
+                record = transform(record)
+
+        # 5. Padding
+        pad_cfg = self.aug_config.get("padding", {})
+        if pad_cfg.get("enabled", False):
+            prob = pad_cfg.get("probability", 0.5)
+            if np.random.rand() < prob:
+                pad_size = pad_cfg.get("pad_size", 10)
+                padding_mode = pad_cfg.get("padding_mode", "reflect")
+                transform = Pad(padding=pad_size, padding_mode=padding_mode, apply_to="image")
+                record = transform(record)
+
+        # 6. Resize
+        resize_cfg = self.aug_config.get("resize", {})
+        if resize_cfg.get("enabled", False):
+            prob = resize_cfg.get("probability", 0.5)
+            if np.random.rand() < prob:
+                target_shape = resize_cfg.get("target_shape", (256, 256))
+                interpolation = resize_cfg.get("interpolation", 1)
+                transform = Resize(
+                    target_shape=target_shape,
+                    interpolation=interpolation,
+                    apply_to="image"
+                )
+                record = transform(record)
+
+        return record
+
+    def _apply_one_of_augmentation(self, record):
+        """Apply ONE randomly selected transform from available options"""
+
+        # Build list of available transforms with their weights
+        available_transforms = []
+
+        # 0. Identity (no transform)
+        identity_cfg = self.aug_config.get("identity", {})
+        if identity_cfg.get("enabled", False):
+            weight = identity_cfg.get("weight", 0.1)
+            available_transforms.append({
+                "name": "identity",
+                "weight": weight,
+                "transform": lambda r: r  # No transformation
+            })
+
+        # 1. Horizontal Flip
+        h_flip_cfg = self.aug_config.get("horizontal_flip", {})
+        if h_flip_cfg.get("enabled", False):
+            weight = h_flip_cfg.get("weight", 1.0)
+            prob = h_flip_cfg.get("probability", 0.5)
+            available_transforms.append({
+                "name": "horizontal_flip",
+                "weight": weight,
+                "transform": lambda r: RandomFlip(axes=1, flip_probability=prob, apply_to="image")(r)
+            })
+
+        # 2. Vertical Flip
+        v_flip_cfg = self.aug_config.get("vertical_flip", {})
+        if v_flip_cfg.get("enabled", False):
+            weight = v_flip_cfg.get("weight", 1.0)
+            prob = v_flip_cfg.get("probability", 0.5)
+            available_transforms.append({
+                "name": "vertical_flip",
+                "weight": weight,
+                "transform": lambda r: RandomFlip(axes=0, flip_probability=prob, apply_to="image")(r)
+            })
+
+        # 3. Rotation 90
+        rot_cfg = self.aug_config.get("rotation_90", {})
+        if rot_cfg.get("enabled", False):
+            weight = rot_cfg.get("weight", 1.0)
+            def apply_rotation(r):
+                angles = rot_cfg.get("angles", [90, 180, 270])
+                k_values = [angle // 90 for angle in angles]
+                k = np.random.choice(k_values)
+                if k > 0:
+                    r["image"] = np.rot90(r["image"], k).copy()
+                    r["metadata"]["applied"].append({
+                        "transform": "Rotation90",
+                        "rotation_k": int(k),
+                        "rotation_angle": int(k * 90)
+                    })
+                return r
+            available_transforms.append({
+                "name": "rotation_90",
+                "weight": weight,
+                "transform": apply_rotation
+            })
+
+        # 4. Random Crop
+        crop_cfg = self.aug_config.get("random_crop", {})
+        if crop_cfg.get("enabled", False):
+            weight = crop_cfg.get("weight", 1.0)
+            def apply_crop(r):
+                crop_size = crop_cfg.get("crop_size", 10)
+                h, w = r["image"].shape
+                crop_vals = np.random.randint(0, crop_size, size=4)
+                transform = Crop(cropping=tuple(crop_vals), apply_to="image")
+                return transform(r)
+            available_transforms.append({
+                "name": "random_crop",
+                "weight": weight,
+                "transform": apply_crop
+            })
+
+        # 5. Padding
+        pad_cfg = self.aug_config.get("padding", {})
+        if pad_cfg.get("enabled", False):
+            weight = pad_cfg.get("weight", 1.0)
+            def apply_pad(r):
+                pad_size = pad_cfg.get("pad_size", 10)
+                padding_mode = pad_cfg.get("padding_mode", "reflect")
+                transform = Pad(padding=pad_size, padding_mode=padding_mode, apply_to="image")
+                return transform(r)
+            available_transforms.append({
+                "name": "padding",
+                "weight": weight,
+                "transform": apply_pad
+            })
+
+        # 6. Resize
+        resize_cfg = self.aug_config.get("resize", {})
+        if resize_cfg.get("enabled", False):
+            weight = resize_cfg.get("weight", 1.0)
+            def apply_resize(r):
+                target_shape = resize_cfg.get("target_shape", (256, 256))
+                interpolation = resize_cfg.get("interpolation", 1)
+                transform = Resize(target_shape=target_shape, interpolation=interpolation, apply_to="image")
+                return transform(r)
+            available_transforms.append({
+                "name": "resize",
+                "weight": weight,
+                "transform": apply_resize
+            })
+
+        # If no transforms available, return unchanged
+        if not available_transforms:
+            return record
+
+        # Select one transform based on weights
+        weights = [t["weight"] for t in available_transforms]
+        weights_sum = sum(weights)
+        probabilities = [w / weights_sum for w in weights]
+
+        selected_idx = np.random.choice(len(available_transforms), p=probabilities)
+        selected = available_transforms[selected_idx]
+
+        # Apply selected transform
+        record = selected["transform"](record)
+
+        # Add info about one_of selection
+        record["metadata"]["one_of_selected"] = selected["name"]
+
+        return record
 
     # Keep old methods for backward compatibility (not used anymore)
     def _extract_patch(self, input_img, target_img):

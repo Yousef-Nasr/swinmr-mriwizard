@@ -18,6 +18,7 @@ from MriWizard.degrade.partial_fourier import PartialFourier
 from MriWizard.degrade.kmax import KmaxUndersample
 from MriWizard.degrade.elliptical import EllipticalUndersample
 from MriWizard.degrade.combine import OneOf, ApplyAll
+from MriWizard.degrade.identity import Identity
 from MriWizard.reconstruct.fft_recon import IFFTReconstruct
 
 # Optional artifacts (may not all be present)
@@ -41,9 +42,25 @@ try:
 except ImportError:
     RandomGibbsRinging = None
 
+try:
+    from MriWizard.degrade.biasfield import RandomBiasFieldImage
+except ImportError:
+    RandomBiasFieldImage = None
+
+try:
+    from MriWizard.degrade.blur import RandomGaussianBlurImage
+except ImportError:
+    RandomGaussianBlurImage = None
+
+try:
+    from MriWizard.degrade.gamma import RandomGamma
+except ImportError:
+    RandomGamma = None
+
 
 # Mapping from config names to MriWizard classes
 DEGRADATION_MAP = {
+    "identity": Identity,
     "random": RandomUndersample,
     "uniform": UniformUndersample,
     "partial_fourier": PartialFourier,
@@ -53,7 +70,10 @@ DEGRADATION_MAP = {
     "motion": RandomMotionKspace,
     "ghosting": RandomGhostingKspace,
     "spike": RandomSpikeKspace,
-    "gibbs": RandomGibbsRinging
+    "gibbs": RandomGibbsRinging,
+    "biasfield": RandomBiasFieldImage,
+    "blur": RandomGaussianBlurImage,
+    "gamma": RandomGamma
 }
 
 
@@ -72,8 +92,51 @@ def build_degradation_pipeline(degradation_config: Dict[str, Any]) -> Pipeline:
         >>> pipeline = build_degradation_pipeline(config)
         >>> degraded_record = pipeline(record)
     """
-    transforms = []
+    # Check if this is a top-level one_of strategy (multiple pipelines to choose from)
+    top_level_strategy = degradation_config.get("strategy", None)
+    
+    if top_level_strategy == "one_of":
+        # Handle multiple complete pipelines with OneOf
+        patterns = degradation_config.get("patterns", [])
+        pipeline_transforms = []
+        weights = []
+        
+        for pattern in patterns:
+            if not pattern.get("enabled", True):
+                continue
+            
+            # Each pattern is a complete pipeline config
+            pipeline_config = pattern.get("pipeline", {})
+            weight = pattern.get("weight", 1.0)
+            
+            # Build the complete pipeline for this pattern
+            transforms = _build_complete_pipeline(pipeline_config)
+            
+            if transforms:
+                # Wrap all transforms in ApplyAll to keep them together
+                pipeline_transforms.append(ApplyAll(transforms))
+                weights.append(weight)
+        
+        if pipeline_transforms:
+            # Normalize weights to probabilities
+            total_weight = sum(weights)
+            probs = [w / total_weight for w in weights]
+            
+            # Return OneOf that selects between complete pipelines
+            return Pipeline([OneOf(pipeline_transforms, probs=probs)])
+        
+        return Pipeline([IFFTReconstruct(normalize=True)])
+    
+    else:
+        # Single pipeline (legacy format)
+        transforms = _build_complete_pipeline(degradation_config)
+        return Pipeline(transforms)
 
+
+def _build_complete_pipeline(degradation_config: Dict[str, Any]) -> List:
+    """Build a complete degradation pipeline from config"""
+    transforms = []
+    
     # Get execution order
     apply_order = degradation_config.get("execution", {}).get("apply_order", ["noise", "undersampling", "artifacts"])
 
@@ -97,23 +160,63 @@ def build_degradation_pipeline(degradation_config: Dict[str, Any]) -> Pipeline:
 
     # 4. Add reconstruction
     transforms.append(IFFTReconstruct(normalize=True))
-
-    return Pipeline(transforms)
+    
+    return transforms
 
 
 def _build_noise(noise_config: Dict[str, Any]):
-    """Build noise transform from config"""
-    if not noise_config.get("enabled", False):
+    """Build noise transform from config - supports one_of strategy"""
+    if not noise_config:
         return None
 
-    params = {
-        "mean": noise_config.get("mean", 0.0),
-        "std": tuple(noise_config["std_range"]),
-        "relative": noise_config.get("relative", True),
-        "reference": noise_config.get("reference", "std")
-    }
+    # Check for one_of strategy (new config format)
+    strategy = noise_config.get("strategy", "single")
 
-    return AddGaussianNoiseKspace(**params)
+    if strategy == "one_of":
+        # Build OneOf with multiple noise patterns
+        patterns = noise_config.get("patterns", [])
+        noise_transforms = []
+        weights = []
+
+        for pattern in patterns:
+            if not pattern.get("enabled", True):
+                continue
+
+            name = pattern["name"]
+            params = _convert_range_params(pattern.get("params", {}))
+            weight = pattern.get("weight", 1.0)
+
+            # Get degradation class
+            degrade_class = DEGRADATION_MAP.get(name)
+            if degrade_class is None:
+                print(f"Warning: Unknown noise type '{name}', skipping")
+                continue
+
+            # Create transform
+            if name == "identity":
+                noise_transforms.append(Identity())
+            else:
+                noise_transforms.append(degrade_class(**params))
+
+            weights.append(weight)
+
+        if noise_transforms:
+            return OneOf(noise_transforms, probs=weights)
+        return None
+
+    else:
+        # Legacy single noise format
+        if not noise_config.get("enabled", False):
+            return None
+
+        params = {
+            "mean": noise_config.get("mean", 0.0),
+            "std": tuple(noise_config["std_range"]),
+            "relative": noise_config.get("relative", True),
+            "reference": noise_config.get("reference", "std")
+        }
+
+        return AddGaussianNoiseKspace(**params)
 
 
 def _build_undersampling(us_config: Dict[str, Any]):
@@ -193,44 +296,88 @@ def _build_pattern(pattern_config: Dict[str, Any]):
 
 
 def _build_artifacts(artifacts_config: Dict[str, Any]) -> List:
-    """Build artifact transforms from config"""
-    transforms = []
+    """Build artifact transforms from config - supports one_of strategy"""
+    if not artifacts_config:
+        return []
 
-    for artifact_name, artifact_cfg in artifacts_config.items():
-        if not artifact_cfg.get("enabled", False):
-            continue
+    # Check for one_of strategy (new config format)
+    strategy = artifacts_config.get("strategy", "individual")
 
-        if artifact_name not in DEGRADATION_MAP:
-            print(f"Warning: Unknown artifact type '{artifact_name}', skipping")
-            continue
+    if strategy == "one_of":
+        # Build OneOf with multiple artifact patterns
+        patterns = artifacts_config.get("patterns", [])
+        artifact_transforms = []
+        weights = []
 
-        artifact_class = DEGRADATION_MAP[artifact_name]
+        for pattern in patterns:
+            if not pattern.get("enabled", True):
+                continue
 
-        if artifact_class is None:
-            print(f"Warning: Artifact '{artifact_name}' not available in MriWizard, skipping")
-            continue
+            name = pattern["name"]
+            params = _convert_range_params(pattern.get("params", {}))
+            weight = pattern.get("weight", 1.0)
 
-        params = artifact_cfg.get("params", {})
-        prob = artifact_cfg.get("probability", 1.0)
+            # Get degradation class
+            degrade_class = DEGRADATION_MAP.get(name)
+            if degrade_class is None:
+                print(f"Warning: Unknown artifact type '{name}', skipping")
+                continue
 
-        try:
-            # Convert range parameters
-            params = _convert_range_params(params)
-            artifact_transform = artifact_class(**params)
-
-            # Wrap in probability if < 1.0
-            if prob < 1.0:
-                # Use OneOf with identity function for probability
-                transforms.append(
-                    OneOf([artifact_transform, lambda x: x], probs=[prob, 1 - prob])
-                )
+            # Create transform
+            if name == "identity":
+                artifact_transforms.append(Identity())
             else:
-                transforms.append(artifact_transform)
+                artifact_transforms.append(degrade_class(**params))
 
-        except Exception as e:
-            print(f"Error creating artifact '{artifact_name}': {e}")
+            weights.append(weight)
 
-    return transforms
+        if artifact_transforms:
+            return [OneOf(artifact_transforms, probs=weights)]
+        return []
+
+    else:
+        # Legacy individual artifact format
+        transforms = []
+
+        for artifact_name, artifact_cfg in artifacts_config.items():
+            # Skip strategy key
+            if artifact_name == "strategy":
+                continue
+
+            if not artifact_cfg.get("enabled", False):
+                continue
+
+            if artifact_name not in DEGRADATION_MAP:
+                print(f"Warning: Unknown artifact type '{artifact_name}', skipping")
+                continue
+
+            artifact_class = DEGRADATION_MAP[artifact_name]
+
+            if artifact_class is None:
+                print(f"Warning: Artifact '{artifact_name}' not available in MriWizard, skipping")
+                continue
+
+            params = artifact_cfg.get("params", {})
+            prob = artifact_cfg.get("probability", 1.0)
+
+            try:
+                # Convert range parameters
+                params = _convert_range_params(params)
+                artifact_transform = artifact_class(**params)
+
+                # Wrap in probability if < 1.0
+                if prob < 1.0:
+                    # Use OneOf with identity for probability
+                    transforms.append(
+                        OneOf([artifact_transform, Identity()], probs=[prob, 1 - prob])
+                    )
+                else:
+                    transforms.append(artifact_transform)
+
+            except Exception as e:
+                print(f"Error creating artifact '{artifact_name}': {e}")
+
+        return transforms
 
 
 def _convert_range_params(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -248,13 +395,26 @@ def _convert_range_params(params: Dict[str, Any]) -> Dict[str, Any]:
     converted = {}
 
     for key, value in params.items():
-        # Special handling for 'axes' parameter
+        # Special handling for 'axes' parameter (Gibbs artifact expects tuple)
         if key == 'axes' and isinstance(value, list):
             if len(value) > 1:
-                # Randomly choose one axis from the list
-                converted[key] = [random.choice(value)]
+                # Randomly choose one axis from the list and wrap in tuple
+                converted[key] = (random.choice(value),)
             else:
-                converted[key] = value
+                # Single value - wrap in tuple
+                converted[key] = (value[0],) if len(value) == 1 else tuple(value)
+        # Special handling for 'axis' parameter (undersample expects single integer)
+        elif key == 'axis' and isinstance(value, list):
+            if len(value) > 1:
+                # Randomly choose one axis from the list
+                converted[key] = random.choice(value)
+            else:
+                # Single value - extract integer from list
+                converted[key] = value[0] if len(value) == 1 else value
+        # Parameters that should be tuples (noise std, mean, etc.)
+        elif key in ['std', 'mean', 'sigma'] and isinstance(value, list):
+            # Convert list to tuple for range parameters
+            converted[key] = tuple(value)
         elif key.endswith('_range') or key.endswith('_ranges'):
             if isinstance(value, list):
                 # Convert nested lists to nested tuples
