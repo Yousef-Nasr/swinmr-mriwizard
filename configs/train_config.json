@@ -9,11 +9,13 @@
   "data": {
     "train_dir": "../S1",
     "val_dir": "../S1",
-    "test_dir": "../S1",
-    "degradation_config": "./degradation_all.json",
-    "batch_size": 1,
+    "test_dir": "../ST1/S1",
+    "degradation_config": "./degradation_modrate.json",
+    "val_degradation_config": "./degradation_modrate_val.json",
+    "batch_size": 4,
+    "val_batch_size": 8,
     "num_workers": 4,
-    "patch_size": 96,
+    "patch_size": 160,
     "use_patches": true,
     "cache_dicom_conversions": true,
     "prefetch_factor": 2,
@@ -38,7 +40,7 @@
       6,
       6
     ],
-    "embed_dim": 180,
+    "embed_dim": 60,
     "num_heads": [
       6,
       6,
@@ -59,6 +61,7 @@
     "print_freq": 100,
     "save_freq": 1000,
     "val_freq": 1,
+    "checkpoint_freq": 1,
     "loss": {
       "type": "multi_component",
       "components": {

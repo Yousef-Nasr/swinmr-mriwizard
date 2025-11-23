@@ -5,6 +5,8 @@ Dynamically builds MriWizard degradation pipeline from JSON configuration.
 """
 
 import sys
+   import random
+import numpy as np
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -92,6 +94,22 @@ def build_degradation_pipeline(degradation_config: Dict[str, Any]) -> Pipeline:
         >>> pipeline = build_degradation_pipeline(config)
         >>> degraded_record = pipeline(record)
     """
+    # Set random seed if specified for deterministic validation
+    execution_config = degradation_config.get("execution", {})
+    seed = execution_config.get("seed", None)
+    deterministic = execution_config.get("deterministic", False)
+    
+    if seed is not None and deterministic:
+        random.seed(seed)
+        np.random.seed(seed)
+        try:
+            import torch
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+        except ImportError:
+            pass
+    
     # Check if this is a top-level one_of strategy (multiple pipelines to choose from)
     top_level_strategy = degradation_config.get("strategy", None)
     

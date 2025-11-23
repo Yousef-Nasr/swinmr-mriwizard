@@ -42,7 +42,9 @@ The main configuration file that controls all aspects of training.
 | `val_dir` | string | Validation data directory | **Required** |
 | `test_dir` | string | Test data directory | Optional |
 | `degradation_config` | string | Path to degradation JSON config | **Required** |
+| `val_degradation_config` | string | Path to validation degradation config (for reproducible validation) | Optional |
 | `batch_size` | int | Training batch size | `8` |
+| `val_batch_size` | int | Validation batch size | `8` |
 | `num_workers` | int | DataLoader workers | `4` |
 | `patch_size` | int/null | Extract patches of this size (null = full image) | `256` |
 | `use_patches` | bool | Whether to use patch extraction | `true` |
@@ -506,6 +508,41 @@ python training/train.py \
 
 ---
 
+## Reproducible Validation Degradation
+
+For consistent validation metrics across epochs, use separate degradation configs for training and validation:
+
+```json
+{
+  "data": {
+    "degradation_config": "./configs/degradation_modrate.json",
+    "val_degradation_config": "./configs/degradation_modrate_val.json"
+  }
+}
+```
+
+**Key differences in validation config:**
+- `augmentation.enabled`: false (no random augmentation)
+- `execution.seed`: 42 (fixed seed)
+- `execution.deterministic`: true (reproducible degradation)
+
+**Benefits:**
+- ✓ Same validation degradation every epoch
+- ✓ Fair model comparison
+- ✓ Reliable early stopping
+- ✓ Reproducible results
+
+See [VALIDATION_DEGRADATION.md](VALIDATION_DEGRADATION.md) for detailed documentation.
+
+**Test reproducibility:**
+```bash
+python scripts/test_validation_reproducibility.py \
+    --config configs/degradation_modrate_val.json \
+    --data-dir ../S1
+```
+
+---
+
 ## Validation
 
 Always validate your configs before training:
@@ -522,4 +559,4 @@ This will check:
 
 ---
 
-**Last Updated**: January 2025
+**Last Updated**: November 2025

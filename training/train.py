@@ -117,9 +117,18 @@ def save_validation_sample(input_img, target_img, output_img, psnr_out, ssim_out
 
 
 def train_epoch(model, loader, optimizer, epoch, config, writer, logger, device):
-    """Train for one epoch"""
+    """
+    Train for one epoch
+    
+    Note: The dataloader ensures that both inputs (degraded) and targets (GT) are 
+    normalized consistently using the same reference (target's 99th percentile).
+    This means both are in [0, 1] range with the same intensity scaling.
+    """
     model.train()
     total_loss = 0
+    total_loss_spatial = 0
+    total_loss_freq = 0
+    total_loss_perc = 0
     num_batches = len(loader)
 
     for batch_idx, (inputs, targets, metadata) in enumerate(loader):
@@ -145,21 +154,39 @@ def train_epoch(model, loader, optimizer, epoch, config, writer, logger, device)
 
         optimizer.step()
 
+        # Accumulate losses
         total_loss += loss.item()
+        total_loss_spatial += model.loss_image.item()
+        total_loss_freq += model.loss_freq.item()
+        total_loss_perc += model.loss_perc.item()
 
-        # Inline progress bar
+        # Inline progress bar with loss components
         progress = (batch_idx + 1) / num_batches * 100
         bar_length = 40
         filled = int(bar_length * (batch_idx + 1) / num_batches)
         bar = '█' * filled + '-' * (bar_length - filled)
 
-        # Print inline (overwrite same line)
-        print(f'\rEpoch {epoch} [{bar}] {progress:.1f}% | Loss: {loss.item():.6f}', end='', flush=True)
+        # Print inline (overwrite same line) with loss breakdown
+        print(f'\rEpoch {epoch} [{bar}] {progress:.1f}% | '
+              f'Total: {loss.item():.4f} | '
+              f'Spatial: {model.loss_image.item():.4f} | '
+              f'Freq: {model.loss_freq.item():.4f} | '
+              f'Perc: {model.loss_perc.item():.4f}', 
+              end='', flush=True)
 
         # TensorBoard logging
         if batch_idx % config['training']['print_freq'] == 0:
             global_step = epoch * num_batches + batch_idx
-            writer.add_scalar('train/loss', loss.item(), global_step)
+            
+            # Log total loss
+            writer.add_scalar('train/loss_total', loss.item(), global_step)
+            
+            # Log individual loss components
+            writer.add_scalar('train/loss_spatial', model.loss_image.item(), global_step)
+            writer.add_scalar('train/loss_frequency', model.loss_freq.item(), global_step)
+            writer.add_scalar('train/loss_perceptual', model.loss_perc.item(), global_step)
+            
+            # Log learning rate
             writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], global_step)
 
             # Log sample images periodically
@@ -173,18 +200,39 @@ def train_epoch(model, loader, optimizer, epoch, config, writer, logger, device)
     # Print newline after epoch completes
     print()
 
+    # Calculate averages
     avg_loss = total_loss / num_batches
-    logger.info(f"Epoch {epoch} - Train Loss: {avg_loss:.6f}")
+    avg_loss_spatial = total_loss_spatial / num_batches
+    avg_loss_freq = total_loss_freq / num_batches
+    avg_loss_perc = total_loss_perc / num_batches
+    
+    # Log epoch summary
+    logger.info(f"Epoch {epoch} - Train Loss: {avg_loss:.6f} "
+                f"(Spatial: {avg_loss_spatial:.6f}, Freq: {avg_loss_freq:.6f}, Perc: {avg_loss_perc:.6f})")
+    
     return avg_loss
 
 
 def validate(model, loader, epoch, config, writer, logger, device):
-    """Validate the model and save sample images"""
+    """
+    Validate the model and save sample images.
+    
+    Processes validation data in batches for efficiency. The loader should have
+    batch_size > 1 for faster validation. Images are processed in parallel on GPU,
+    then metrics are computed and samples saved individually.
+    
+    Note: The dataloader ensures that both inputs (degraded) and targets (GT) are 
+    normalized consistently using the same reference (target's 99th percentile).
+    This means both are in [0, 1] range with the same intensity scaling.
+    """
     import matplotlib.pyplot as plt
     from pathlib import Path
 
     model.netG.eval()  # Use netG for evaluation
     total_loss = 0
+    total_loss_spatial = 0
+    total_loss_freq = 0
+    total_loss_perc = 0
     total_psnr = 0
     total_ssim = 0
     num_samples = 0
@@ -211,6 +259,11 @@ def validate(model, loader, epoch, config, writer, logger, device):
             # Compute loss using model's total_loss
             loss = model.total_loss()
             total_loss += loss.item()
+            
+            # Accumulate individual loss components
+            total_loss_spatial += model.loss_image.item()
+            total_loss_freq += model.loss_freq.item()
+            total_loss_perc += model.loss_perc.item()
 
             # Compute metrics and save samples
             for i in range(outputs.shape[0]):
@@ -231,18 +284,27 @@ def validate(model, loader, epoch, config, writer, logger, device):
                     )
                     saved_count += 1
 
+    # Calculate averages
     avg_loss = total_loss / len(loader)
+    avg_loss_spatial = total_loss_spatial / len(loader)
+    avg_loss_freq = total_loss_freq / len(loader)
+    avg_loss_perc = total_loss_perc / len(loader)
     avg_psnr = total_psnr / num_samples
     avg_ssim = total_ssim / num_samples
 
+    # Log to console with loss breakdown
     logger.info(
         f"Validation Epoch {epoch} - "
-        f"Loss: {avg_loss:.6f}, PSNR: {avg_psnr:.2f} dB, SSIM: {avg_ssim:.4f}"
+        f"Loss: {avg_loss:.6f} (Spatial: {avg_loss_spatial:.6f}, Freq: {avg_loss_freq:.6f}, Perc: {avg_loss_perc:.6f}), "
+        f"PSNR: {avg_psnr:.2f} dB, SSIM: {avg_ssim:.4f}"
     )
     logger.info(f"Saved {saved_count} validation samples to {val_samples_dir}")
 
-    # TensorBoard logging
-    writer.add_scalar('val/loss', avg_loss, epoch)
+    # TensorBoard logging - total loss and components
+    writer.add_scalar('val/loss_total', avg_loss, epoch)
+    writer.add_scalar('val/loss_spatial', avg_loss_spatial, epoch)
+    writer.add_scalar('val/loss_frequency', avg_loss_freq, epoch)
+    writer.add_scalar('val/loss_perceptual', avg_loss_perc, epoch)
     writer.add_scalar('val/psnr', avg_psnr, epoch)
     writer.add_scalar('val/ssim', avg_ssim, epoch)
 
@@ -317,9 +379,13 @@ def main():
         return_metadata=True
     )
 
+    # Use separate validation degradation config if provided
+    val_degradation_config_path = config['data'].get('val_degradation_config', degradation_config_path)
+    logger.info(f"Using validation degradation config: {val_degradation_config_path}")
+    
     val_dataset = HybridMRIDataset(
         data_dir=config['data']['val_dir'],
-        degradation_config=degradation_config_path,
+        degradation_config=val_degradation_config_path,
         patch_size=None,  # Full images for validation
         cache_dir=exp_dir / 'cache' / 'val',
         use_augmentation=False,
@@ -339,14 +405,18 @@ def main():
         collate_fn=collate_fn_with_metadata
     )
 
+    # Use configurable batch size for validation (default to same as training for efficiency)
+    val_batch_size = config['data'].get('val_batch_size', config['data']['batch_size'])
     val_loader = DataLoader(
         val_dataset,
-        batch_size=1,
+        batch_size=val_batch_size,
         shuffle=False,
-        num_workers=2,
+        num_workers=config['data'].get('num_workers', 4),
         pin_memory=True,
         collate_fn=collate_fn_with_metadata
     )
+    
+    logger.info(f"Train batch size: {config['data']['batch_size']}, Val batch size: {val_batch_size}")
 
     # Create model
     logger.info("Creating model...")
@@ -419,9 +489,9 @@ def main():
 
     if args.resume:
         logger.info(f"Resuming from checkpoint: {args.resume}")
-        checkpoint = load_checkpoint(args.resume, model, optimizer, scheduler)
+        checkpoint = load_checkpoint(args.resume, model.netG, optimizer, scheduler)
         start_epoch = checkpoint.get('epoch', 0) + 1
-        best_val_ssim = checkpoint.get('best_val_ssim', 0.0)
+        best_val_ssim = checkpoint.get('metrics', {}).get('best_val_ssim', 0.0)
         logger.info(f"Resumed from epoch {start_epoch}, best SSIM: {best_val_ssim:.4f}")
 
     # Training loop
@@ -453,7 +523,7 @@ def main():
                     scheduler,
                     epoch=epoch,
                     step=0,
-                    metrics={'val_loss': val_loss, 'val_psnr': val_psnr, 'val_ssim': val_ssim}
+                    metrics={'val_loss': val_loss, 'val_psnr': val_psnr, 'val_ssim': val_ssim, 'best_val_ssim': best_val_ssim}
                 )
                 logger.info(f"✓ Saved best checkpoint (SSIM: {val_ssim:.4f})")
 
@@ -469,8 +539,9 @@ def main():
         # Step scheduler
         scheduler.step()
 
-        # Save periodic checkpoint
-        if (epoch + 1) % 10 == 0:
+        # Save checkpoint every epoch (configurable via checkpoint_freq)
+        checkpoint_freq = config['training'].get('checkpoint_freq', 1)
+        if (epoch + 1) % checkpoint_freq == 0:
             save_checkpoint(
                 str(ckpt_dir / f'epoch_{epoch+1}.pth'),
                 model.netG,  # Save the network, not the wrapper
@@ -478,8 +549,12 @@ def main():
                 scheduler,
                 epoch=epoch,
                 step=0,
-                metrics={'val_ssim': best_val_ssim}
+                metrics={'val_loss': val_loss if (epoch + 1) % config['training']['val_freq'] == 0 else None,
+                        'val_psnr': val_psnr if (epoch + 1) % config['training']['val_freq'] == 0 else None,
+                        'val_ssim': val_ssim if (epoch + 1) % config['training']['val_freq'] == 0 else None,
+                        'best_val_ssim': best_val_ssim}
             )
+            logger.info(f"Saved checkpoint: epoch_{epoch+1}.pth")
 
         epoch_time = time.time() - epoch_start_time
         logger.info(f"Epoch {epoch} completed in {epoch_time:.1f}s")

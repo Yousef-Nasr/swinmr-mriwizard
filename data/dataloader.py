@@ -77,6 +77,11 @@ class HybridMRIDataset(Dataset):
         self.use_augmentation = aug_config.get("enabled", use_augmentation)
         self.aug_config = aug_config
 
+        # Check if deterministic mode is enabled
+        execution_config = degradation_config.get("execution", {})
+        self.deterministic = execution_config.get("deterministic", False)
+        self.base_seed = execution_config.get("seed", None)
+
         # Build MriWizard pipeline
         self.pipeline = build_degradation_pipeline(degradation_config)
 
@@ -257,6 +262,21 @@ class HybridMRIDataset(Dataset):
         # Recompute k-space from augmented image
         record["kspace"] = fft2c(target_image)
 
+        # Set deterministic seed if enabled (for reproducible validation)
+        if self.deterministic and self.base_seed is not None:
+            # Use idx to ensure each sample gets consistent but different degradation
+            sample_seed = self.base_seed + idx
+            np.random.seed(sample_seed)
+            import random
+            random.seed(sample_seed)
+            try:
+                import torch
+                torch.manual_seed(sample_seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed_all(sample_seed)
+            except ImportError:
+                pass
+
         # Apply degradation pipeline to augmented image
         degraded_record = self.pipeline(record)
         input_image = degraded_record["image"]
@@ -268,6 +288,25 @@ class HybridMRIDataset(Dataset):
         # Ensure 2D
         if input_image.ndim != 2 or target_image.ndim != 2:
             raise ValueError(f"Expected 2D images, got input: {input_image.shape}, target: {target_image.shape}")
+
+        # CRITICAL: Ensure both input and target use the SAME normalization
+        # The degradation pipeline normalizes the input via IFFTReconstruct(normalize=True)
+        # which uses 99th percentile normalization.
+        # 
+        # IMPORTANT: We must normalize BOTH images using the SAME reference (the original GT)
+        # to maintain consistent intensity scaling between input and target.
+        # 
+        # Strategy: Use the target's 99th percentile to normalize BOTH images
+        # This ensures the target is properly normalized AND the input maintains
+        # the correct relative intensity relationship to the target.
+        
+        # Calculate normalization factor from the ground truth (target)
+        target_max = np.percentile(target_image, 99)
+        
+        if target_max > 0:
+            # Normalize both using the same reference (target's 99th percentile)
+            target_image = np.clip(target_image / target_max, 0, 1)
+            input_image = np.clip(input_image / target_max, 0, 1)
 
         # Convert to tensors
         input_tensor = torch.from_numpy(input_image).unsqueeze(0).float()  # (1, H, W)
